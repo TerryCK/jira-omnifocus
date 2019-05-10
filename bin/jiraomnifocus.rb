@@ -65,12 +65,17 @@ end
 
 # This method gets all issues that are assigned to your USERNAME and whos status isn't Closed or Resolved.  It returns a Hash where the key is the Jira Ticket Key and the value is the Jira Ticket Summary.
 def get_issues
+  # $DEBUG = true
   if $DEBUG
     puts "JOFSYNC.get_issues: starting method..."
   end
   jira_issues = Hash.new
   # This is the REST URL that will be hit.  Change the jql query if you want to adjust the query used here
-  uri = URI($opts[:hostname] + '/rest/api/2/search?jql=' + URI::encode($opts[:filter]))
+
+  uri = URI($opts[:hostname] + '/rest/api/2/search?jql=' + $opts[:filter])
+  # uri = URI($opts[:hostname] + '/rest/api/2/search?jql=' + 'status+not+in+%28%22900+Resolved%22%2C+%22990+Closed%22%29+AND+assignee+in+%28currentUser%28%29%29&tempMax=1000')
+
+
   if $DEBUG
     puts "JOFSYNC.get_issues: about to hit URL: " + uri.to_s()
   end
@@ -105,8 +110,8 @@ def get_issues
     response = http.request request
     # If the response was good, then grab the data
     if $DEBUG
-      puts "JOFSYNC.get_issues: response code: " + response.code
-      puts "JOFSYNC.get_issues: response body: " + response.body
+      # puts "JOFSYNC.get_issues: response code: " + response.code
+      # puts "JOFSYNC.get_issues: response body: " + response.body
     end
     if response.code =~ /20[0-9]{1}/
       puts "Connected successfully to " + uri.hostname
@@ -268,18 +273,18 @@ def add_jira_tickets_to_omnifocus (omnifocus_document)
       puts "JOFSYNC.add_jira_tickets_to_omnifocus: looking at jira_id: " + jira_id
     end
     # Create the task name by adding the ticket summary to the jira ticket key
-    task_name = "#{jira_id}: #{ticket["fields"]["summary"]}"
+    task_name = "#{jira_id} - #{ticket["fields"]["summary"]}"
     if $DEBUG
       puts "JOFSYNC.add_jira_tickets_to_omnifocus: created task_name: " + task_name
     end
     # Create the task notes with the Jira Ticket URL
     task_notes = "#{$opts[:hostname]}/browse/#{jira_id}\n\n#{ticket["fields"]["description"]}"
-
+    # puts "creating task: " + ticket["fields"]["status"]["name"].to_s
     # Build properties for the Task
     @props = {}
     @props['name'] = task_name
     @props['project'] = $opts[:project]
-    @props['context'] = $opts[:context] if $opts[:context]
+    @props['context'] = ticket["fields"]["status"]["name"].to_s
     @props['note'] = task_notes
     @props['flagged'] = $opts[:flag]
     unless ticket["fields"]["duedate"].nil?
@@ -305,14 +310,14 @@ def mark_resolved_jira_tickets_as_complete_in_omnifocus (omnifocus_document)
   end
   omnifocus_document.flattened_tasks.get.find.each do |task|
   if $DEBUG
-    puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: About to iterate through all tasks in OmniFocus document"
+    # puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: About to iterate through all tasks in OmniFocus document"
   end
     if $DEBUG
-      puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: working on task: " + task.name.get
+      # puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: working on task: " + task.name.get
     end
     if !task.completed.get && task.note.get.match($opts[:hostname])
       if $DEBUG
-        puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: task is NOT already marked complete, so let's check the status of the JIRA ticket."
+        # puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: task is NOT already marked complete, so let's check the status of the JIRA ticket."
       end
       # try to parse out jira id
       full_url= task.note.get.lines.first.chomp
@@ -329,16 +334,16 @@ def mark_resolved_jira_tickets_as_complete_in_omnifocus (omnifocus_document)
         if $DEBUG
           puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: about to hit: " + uri.to_s()
         end
-        
-        
+
+
         verify_mode = $opts[:ssl_verify] ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE
         Net::HTTP.start(uri.hostname, uri.port, :use_ssl => uri.scheme == 'https', :verify_mode => verify_mode) do |http|
           request = Net::HTTP::Get.new(uri)
           request.basic_auth $opts[:username], $opts[:password]
           response = http.request request
           if $DEBUG
-            puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: response code: " + response.code
-            puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: response body: " + response.body
+            # puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: response code: " + response.code
+            # puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: response body: " + response.body
           end
           if response.code =~ /20[0-9]{1}/
             data = JSON.parse(response.body)
@@ -371,28 +376,32 @@ def mark_resolved_jira_tickets_as_complete_in_omnifocus (omnifocus_document)
                 omnifocus_document.delete task
               else
                 assignee = data["fields"]["assignee"]["name"].downcase
+                isAssignee = false
+                data["fields"]["customfield_10010"].each do | element |
+                  if element["name"] == $opts[:username].downcase
+                    isAssignee = true
+                  end
+                end
+
                 if $DEBUG
                   puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: curent assignee is: " + assignee
                 end
-                if assignee != $opts[:username].downcase
+
+                if assignee != $opts[:username].downcase && !isAssignee
                   if $DEBUG
                     puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: That doesn't match your username of \"" + $opts[:username].downcase + "\" so deleting the task from OmniFocus"
                   end
                   omnifocus_document.delete task
-                  
-                else 
-                  assignee = data["fields"]["assignee"]["name"].downcase 
-                  assigneeEmail = data["fields"]["assignee"]["emailAddress"].downcase 
-                  
-                  if $DEBUG 
-                    puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: curent assignee is: " + assignee 
-                  end 
-                  
-                  if assignee != $opts[:username].downcase && assigneeEmail != $opts[:username].downcase 
-                    if $DEBUG 
-                      puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: That doesn't match your username of \"" + $opts[:username].downcase + "\" so deleting the task from OmniFocus" 
-                    end 
-                    omnifocus_document.delete task 
+
+                else
+                  assignee = data["fields"]["assignee"]["name"].downcase
+                  assigneeEmail = data["fields"]["assignee"]["emailAddress"].downcase
+
+                  if assignee != $opts[:username].downcase && assigneeEmail != $opts[:username].downcase && !isAssignee
+                    if $DEBUG
+                      puts "JOFSYNC.mark_resolved_jira_tickets_as_complete_in_omnifocus: That doesn't match your username of \"" + $opts[:username].downcase + "\" so deleting the task from OmniFocus"
+                    end
+                    omnifocus_document.delete task
                   end
                 end
               end
